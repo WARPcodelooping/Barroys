@@ -1,47 +1,169 @@
-import { useState } from 'react';
-import { MENU, CATEGORY_TABS } from './data';
+import { useState, useEffect } from 'react';
+import { MENU, CATEGORY_TABS, type MenuItem } from './data';
 
 type ScreenId =
   | 'auth' | 'home' | 'item' | 'cart' | 'confirm' | 'profile'
   | 'admin-orders' | 'admin-products' | 'admin-profile';
 
+type ShowFn = (id: ScreenId) => void;
+
+interface CartLine { item: MenuItem; qty: number; }
+interface User { name: string; phone: string; }
+
+const USER_KEY = 'barroys_user';
+
+function fmt(n: number) {
+  return n.toLocaleString('ru-RU');
+}
+
+function loadUser(): User | null {
+  try {
+    const raw = localStorage.getItem(USER_KEY);
+    return raw ? (JSON.parse(raw) as User) : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
-  const [screen, setScreen] = useState<ScreenId>('auth');
+  const [user, setUser] = useState<User | null>(loadUser);
+  const [screen, setScreen] = useState<ScreenId>(() => (loadUser() ? 'home' : 'auth'));
+  const [cart, setCart] = useState<CartLine[]>([]);
+  const [selected, setSelected] = useState<MenuItem | null>(null);
+  const [showReg, setShowReg] = useState(false);
+
   const show = (id: ScreenId) => setScreen(id);
+
+  const cartCount = cart.reduce((s, l) => s + l.qty, 0);
+  const cartTotal = cart.reduce((s, l) => s + l.qty * l.item.price, 0);
+
+  const addToCart = (item: MenuItem, n = 1) => {
+    setCart((prev) => {
+      const ex = prev.find((l) => l.item.name === item.name);
+      if (ex) return prev.map((l) => (l.item.name === item.name ? { ...l, qty: l.qty + n } : l));
+      return [...prev, { item, qty: n }];
+    });
+  };
+  const changeQty = (name: string, delta: number) => {
+    setCart((prev) =>
+      prev
+        .map((l) => (l.item.name === name ? { ...l, qty: l.qty + delta } : l))
+        .filter((l) => l.qty > 0),
+    );
+  };
+  const qtyOf = (name: string) => cart.find((l) => l.item.name === name)?.qty ?? 0;
+
+  // Авторизация: если новый клиент — открываем регистрацию, иначе сразу в меню
+  const onLogin = () => {
+    if (user) { show('home'); return; }
+    setShowReg(true);
+  };
+  const onRegister = (u: User) => {
+    localStorage.setItem(USER_KEY, JSON.stringify(u));
+    setUser(u);
+    setShowReg(false);
+    show('home');
+  };
+
+  const checkout = () => {
+    show('confirm');
+    setCart([]);
+  };
+
+  const openItem = (item: MenuItem) => { setSelected(item); show('item'); };
 
   const isAdmin = screen.startsWith('admin-');
 
   return (
     <div className="phone">
       {/* Превью-переключатель роли (временный, уберём когда роль будет по Telegram ID) */}
-      <button
-        className="role-toggle"
-        onClick={() => show(isAdmin ? 'auth' : 'admin-orders')}
-      >
+      <button className="role-toggle" onClick={() => show(isAdmin ? 'home' : 'admin-orders')}>
         {isAdmin ? '👤 Клиент' : '⚙️ Админ'}
       </button>
 
-        <AuthScreen active={screen === 'auth'} show={show} />
-        <HomeScreen active={screen === 'home'} show={show} />
-        <ItemScreen active={screen === 'item'} show={show} />
-        <CartScreen active={screen === 'cart'} show={show} />
-        <ConfirmScreen active={screen === 'confirm'} show={show} />
-        <ProfileScreen active={screen === 'profile'} show={show} />
-        <AdminOrdersScreen active={screen === 'admin-orders'} show={show} />
-        <AdminProductsScreen active={screen === 'admin-products'} show={show} />
-        <AdminProfileScreen active={screen === 'admin-profile'} show={show} />
+      <AuthScreen active={screen === 'auth'} onLogin={onLogin} />
+      <HomeScreen
+        active={screen === 'home'}
+        show={show}
+        addToCart={addToCart}
+        openItem={openItem}
+        cartCount={cartCount}
+        cartTotal={cartTotal}
+      />
+      <ItemScreen active={screen === 'item'} show={show} item={selected} qty={selected ? qtyOf(selected.name) : 0} addToCart={addToCart} />
+      <CartScreen active={screen === 'cart'} show={show} cart={cart} total={cartTotal} changeQty={changeQty} checkout={checkout} />
+      <ConfirmScreen active={screen === 'confirm'} show={show} />
+      <ProfileScreen active={screen === 'profile'} show={show} user={user} />
+      <AdminOrdersScreen active={screen === 'admin-orders'} show={show} />
+      <AdminProductsScreen active={screen === 'admin-products'} show={show} />
+      <AdminProfileScreen active={screen === 'admin-profile'} show={show} />
+
+      {showReg && <RegisterModal onSubmit={onRegister} onClose={() => setShowReg(false)} />}
     </div>
   );
 }
-
-type ShowFn = (id: ScreenId) => void;
 
 function screenClass(active: boolean) {
   return 'screen' + (active ? ' active' : '');
 }
 
+/* ══ REGISTER MODAL ══ */
+function RegisterModal({ onSubmit, onClose }: { onSubmit: (u: User) => void; onClose: () => void }) {
+  const tg = (window as any)?.Telegram?.WebApp;
+  const tgUser = tg?.initDataUnsafe?.user;
+  const [name, setName] = useState<string>(
+    tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ') : '',
+  );
+  const [phone, setPhone] = useState('');
+
+  const shareViaTelegram = () => {
+    if (tg?.requestContact) {
+      tg.requestContact((ok: boolean, res: any) => {
+        const p = res?.responseUnsafe?.contact?.phone_number;
+        if (ok && p) setPhone(p);
+      });
+    }
+  };
+
+  const valid = name.trim().length >= 2 && phone.trim().length >= 6;
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-emoji">🍔</div>
+        <div className="modal-title">ДОБРО ПОЖАЛОВАТЬ</div>
+        <div className="modal-sub">Заполните данные — это нужно только один раз</div>
+
+        <label className="modal-label">Имя</label>
+        <input
+          className="modal-input"
+          placeholder="Как вас зовут?"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+
+        <label className="modal-label">Телефон</label>
+        <input
+          className="modal-input"
+          placeholder="+7 (___) ___-__-__"
+          inputMode="tel"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+        />
+        {tg?.requestContact && (
+          <button className="modal-tg-share" onClick={shareViaTelegram}>📱 Взять номер из Telegram</button>
+        )}
+
+        <button className="modal-submit" disabled={!valid} onClick={() => onSubmit({ name: name.trim(), phone: phone.trim() })}>
+          Продолжить
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ══ AUTH ══ */
-function AuthScreen({ active, show }: { active: boolean; show: ShowFn }) {
+function AuthScreen({ active, onLogin }: { active: boolean; onLogin: () => void }) {
   return (
     <div className={screenClass(active)}>
       <div className="auth-screen">
@@ -50,7 +172,7 @@ function AuthScreen({ active, show }: { active: boolean; show: ShowFn }) {
         <div className="auth-tagline">Мясо. Огонь. Вкус.</div>
         <div className="auth-burger-emoji">🔥</div>
         <div className="auth-desc">Войдите чтобы сделать заказ.<br /><strong>Номер телефона возьмём из Telegram</strong> — одна кнопка, без лишних шагов.</div>
-        <button className="tg-btn" onClick={() => show('home')}>
+        <button className="tg-btn" onClick={onLogin}>
           <span className="tg-icon">📱</span>
           Войти через Telegram
         </button>
@@ -60,9 +182,17 @@ function AuthScreen({ active, show }: { active: boolean; show: ShowFn }) {
 }
 
 /* ══ HOME / CATALOG ══ */
-function HomeScreen({ active, show }: { active: boolean; show: ShowFn }) {
+function HomeScreen({ active, show, addToCart, openItem, cartCount, cartTotal }: {
+  active: boolean; show: ShowFn; addToCart: (i: MenuItem) => void; openItem: (i: MenuItem) => void;
+  cartCount: number; cartTotal: number;
+}) {
   const [tab, setTab] = useState(0);
-  const [added, setAdded] = useState<Record<string, boolean>>({});
+
+  const goCategory = (i: number) => {
+    setTab(i);
+    const el = document.getElementById(MENU[i].id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   return (
     <div className={screenClass(active)}>
@@ -74,47 +204,40 @@ function HomeScreen({ active, show }: { active: boolean; show: ShowFn }) {
       </div>
       <div className="cat-tabs">
         {CATEGORY_TABS.map((t, i) => (
-          <div key={t} className={'cat-tab' + (tab === i ? ' active' : '')} onClick={() => setTab(i)}>{t}</div>
+          <div key={t} className={'cat-tab' + (tab === i ? ' active' : '')} onClick={() => goCategory(i)}>{t}</div>
         ))}
       </div>
-      <div className="scroll-body" style={{ paddingBottom: 80 }}>
+      <div className="scroll-body" style={{ paddingBottom: cartCount > 0 ? 80 : 16 }}>
         {MENU.map((section) => (
-          <div className="menu-section" key={section.title}>
+          <div className="menu-section" id={section.id} key={section.id}>
             <div className="menu-section-title">{section.title}</div>
             <div className="menu-items">
-              {section.items.map((it) => {
-                const key = section.title + it.name;
-                const isAdded = !!added[key];
-                return (
-                  <div className="menu-item" key={key} onClick={() => show('item')}>
-                    <div className="menu-item-img">{it.emoji}</div>
-                    <div className="menu-item-info">
-                      <div>
-                        <div className="menu-item-name">{it.name}</div>
-                        <div className="menu-item-desc">{it.desc}</div>
-                      </div>
-                      <div className="menu-item-bottom">
-                        <div className="menu-item-price">{it.price} ₽</div>
-                        <button
-                          className={'add-btn' + (isAdded ? ' added' : '')}
-                          onClick={(e) => { e.stopPropagation(); setAdded((p) => ({ ...p, [key]: !p[key] })); }}
-                        >
-                          {isAdded ? '✓' : '+'}
-                        </button>
-                      </div>
+              {section.items.map((it) => (
+                <div className="menu-item" key={it.name} onClick={() => openItem(it)}>
+                  <div className="menu-item-img">{it.emoji}</div>
+                  <div className="menu-item-info">
+                    <div>
+                      <div className="menu-item-name">{it.name}</div>
+                      <div className="menu-item-desc">{it.desc}</div>
+                    </div>
+                    <div className="menu-item-bottom">
+                      <div className="menu-item-price">{it.price} ₽</div>
+                      <button className="add-btn" onClick={(e) => { e.stopPropagation(); addToCart(it); }}>+</button>
                     </div>
                   </div>
-                );
-              })}
+                </div>
+              ))}
             </div>
           </div>
         ))}
       </div>
-      <button className="cart-fab" onClick={() => show('cart')}>
-        🛒 Корзина
-        <div className="cart-count">2</div>
-        <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13 }}>· 1 030 ₽</span>
-      </button>
+      {cartCount > 0 && (
+        <button className="cart-fab" onClick={() => show('cart')}>
+          🛒 Корзина
+          <div className="cart-count">{cartCount}</div>
+          <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13 }}>· {fmt(cartTotal)} ₽</span>
+        </button>
+      )}
       <div className="bottom-nav">
         <div className="nav-item active" onClick={() => show('home')}>
           <div className="nav-icon">🍔</div><span>Меню</span><div className="nav-dot" />
@@ -131,27 +254,34 @@ function HomeScreen({ active, show }: { active: boolean; show: ShowFn }) {
 }
 
 /* ══ ITEM DETAIL ══ */
-function ItemScreen({ active, show }: { active: boolean; show: ShowFn }) {
+function ItemScreen({ active, show, item, qty, addToCart }: {
+  active: boolean; show: ShowFn; item: MenuItem | null; qty: number; addToCart: (i: MenuItem, n: number) => void;
+}) {
+  const [n, setN] = useState(1);
+  useEffect(() => { setN(1); }, [item]);
+  if (!item) return <div className={screenClass(active)} />;
+
   return (
     <div className={screenClass(active)}>
       <div className="item-hero">
         <button className="back-btn" onClick={() => show('home')}>←</button>
-        🍔
+        {item.emoji}
       </div>
       <div className="item-body">
-        <div className="item-name">ВИШНЯ НА КОНЦЕ</div>
-        <div className="item-price-big">610 <span>₽</span></div>
+        <div className="item-name">{item.name.toUpperCase()}</div>
+        <div className="item-price-big">{item.price} <span>₽</span></div>
         <div className="item-section-label">Состав</div>
-        <div className="item-ingredients">
-          Булочка, фирменный горчичный соус, салат, томат, сочная мраморная говядина, огурец маринованный, бекон, фирменный вишнёвый соус, луковые кольца
-        </div>
+        <div className="item-ingredients">{item.desc}</div>
         <div className="qty-row">
-          <button className="qty-btn">−</button>
-          <span className="qty-num">1</span>
-          <button className="qty-btn">+</button>
-          <span style={{ fontSize: 13, color: 'var(--text-sec)' }}>× 610 ₽ = <strong style={{ color: 'var(--text)' }}>610 ₽</strong></span>
+          <button className="qty-btn" onClick={() => setN((v) => Math.max(1, v - 1))}>−</button>
+          <span className="qty-num">{n}</span>
+          <button className="qty-btn" onClick={() => setN((v) => v + 1)}>+</button>
+          <span style={{ fontSize: 13, color: 'var(--text-sec)' }}>
+            × {item.price} ₽ = <strong style={{ color: 'var(--text)' }}>{fmt(item.price * n)} ₽</strong>
+          </span>
         </div>
-        <button className="add-to-cart-btn" onClick={() => show('cart')}>
+        {qty > 0 && <div className="item-incart">В корзине: {qty} шт</div>}
+        <button className="add-to-cart-btn" onClick={() => { addToCart(item, n); show('cart'); }}>
           🛒 Добавить в корзину
         </button>
       </div>
@@ -160,51 +290,54 @@ function ItemScreen({ active, show }: { active: boolean; show: ShowFn }) {
 }
 
 /* ══ CART ══ */
-function CartScreen({ active, show }: { active: boolean; show: ShowFn }) {
+function CartScreen({ active, show, cart, total, changeQty, checkout }: {
+  active: boolean; show: ShowFn; cart: CartLine[]; total: number;
+  changeQty: (name: string, delta: number) => void; checkout: () => void;
+}) {
+  const empty = cart.length === 0;
   return (
     <div className={screenClass(active)}>
       <div className="cart-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
-          <button
-            className="back-btn"
-            style={{ position: 'static', width: 32, height: 32, background: 'var(--bg3)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 16 }}
-            onClick={() => show('home')}
-          >←</button>
-          <div className="cart-title">КОРЗИНА</div>
-        </div>
+        <div className="cart-title">КОРЗИНА</div>
       </div>
       <div className="scroll-body">
-        <div className="cart-items">
-          <div className="cart-item">
-            <div className="cart-item-img">🍔</div>
-            <div className="cart-item-info">
-              <div className="cart-item-name">Вишня на конце</div>
-              <div className="cart-item-price">610 ₽</div>
-            </div>
-            <div className="cart-item-controls">
-              <button className="ci-btn">−</button>
-              <span className="ci-qty">1</span>
-              <button className="ci-btn">+</button>
-            </div>
+        {empty ? (
+          <div className="cart-empty">
+            <div className="cart-empty-emoji">🛒</div>
+            <div className="cart-empty-title">Корзина пуста</div>
+            <div className="cart-empty-sub">Добавьте что-нибудь вкусное из меню</div>
+            <button className="cart-empty-btn" onClick={() => show('home')}>Перейти в меню</button>
           </div>
-          <div className="cart-item">
-            <div className="cart-item-img">🌯</div>
-            <div className="cart-item-info">
-              <div className="cart-item-name">Рулон Гриль</div>
-              <div className="cart-item-price">420 ₽</div>
+        ) : (
+          <>
+            <div className="cart-items">
+              {cart.map((l) => (
+                <div className="cart-item" key={l.item.name}>
+                  <div className="cart-item-img">{l.item.emoji}</div>
+                  <div className="cart-item-info">
+                    <div className="cart-item-name">{l.item.name}</div>
+                    <div className="cart-item-price">{fmt(l.item.price * l.qty)} ₽</div>
+                  </div>
+                  <div className="cart-item-controls">
+                    <button className="ci-btn" onClick={() => changeQty(l.item.name, -1)}>−</button>
+                    <span className="ci-qty">{l.qty}</span>
+                    <button className="ci-btn" onClick={() => changeQty(l.item.name, +1)}>+</button>
+                  </div>
+                </div>
+              ))}
             </div>
-            <div className="cart-item-controls">
-              <button className="ci-btn">−</button>
-              <span className="ci-qty">1</span>
-              <button className="ci-btn">+</button>
-            </div>
-          </div>
-        </div>
-        <div className="divider" />
-        <div className="cart-total-row"><span className="cart-total-label">Товары</span><span className="cart-total-val">1 030 ₽</span></div>
-        <div className="cart-total-row big"><span className="cart-total-label">Итого</span><span className="cart-total-val">1 030 ₽</span></div>
-        <button className="pay-btn" onClick={() => show('confirm')}>💳 Оплатить 1 030 ₽</button>
-        <div style={{ height: 24 }} />
+            <div className="divider" />
+            <div className="cart-total-row"><span className="cart-total-label">Товары</span><span className="cart-total-val">{fmt(total)} ₽</span></div>
+            <div className="cart-total-row big"><span className="cart-total-label">Итого</span><span className="cart-total-val">{fmt(total)} ₽</span></div>
+            <button className="pay-btn" onClick={checkout}>💳 Оплатить {fmt(total)} ₽</button>
+            <div style={{ height: 24 }} />
+          </>
+        )}
+      </div>
+      <div className="bottom-nav">
+        <div className="nav-item" onClick={() => show('home')}><div className="nav-icon">🍔</div><span>Меню</span></div>
+        <div className="nav-item active"><div className="nav-icon">🛒</div><span>Корзина</span><div className="nav-dot" /></div>
+        <div className="nav-item" onClick={() => show('profile')}><div className="nav-icon">👤</div><span>Профиль</span></div>
       </div>
     </div>
   );
@@ -228,14 +361,17 @@ function ConfirmScreen({ active, show }: { active: boolean; show: ShowFn }) {
 }
 
 /* ══ PROFILE (CLIENT) ══ */
-function ProfileScreen({ active, show }: { active: boolean; show: ShowFn }) {
+function ProfileScreen({ active, show, user }: { active: boolean; show: ShowFn; user: User | null }) {
+  const name = user?.name || 'Гость';
+  const phone = user?.phone || '';
+  const initials = name.split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase();
   return (
     <div className={screenClass(active)}>
       <div className="profile-top">
-        <div className="profile-avatar">АН</div>
+        <div className="profile-avatar">{initials}</div>
         <div>
-          <div className="profile-name">Андрей Никитин</div>
-          <div className="profile-phone">+7 (999) 123-45-67</div>
+          <div className="profile-name">{name}</div>
+          <div className="profile-phone">{phone}</div>
         </div>
       </div>
       <div className="scroll-body">

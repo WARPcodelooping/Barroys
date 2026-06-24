@@ -9,6 +9,7 @@ export interface MenuItem {
 }
 
 export interface MenuSection {
+  id: string;      // якорь для перехода по табам
   title: string;   // с эмодзи, как в прототипе
   items: MenuItem[];
 }
@@ -19,6 +20,7 @@ export const CATEGORY_TABS = [
 
 export const MENU: MenuSection[] = [
   {
+    id: 'cat-0',
     title: '🔥 Новинки',
     items: [
       { name: 'Вишня на конце (бургер)', emoji: '🍔', price: 610, desc: 'Булочка, фирменный горчичный соус, салат, томат, сочная мраморная говядина, огурец маринованный, бекон, вишнёвый соус, луковые кольца' },
@@ -29,6 +31,7 @@ export const MENU: MenuSection[] = [
     ],
   },
   {
+    id: 'cat-1',
     title: '🥩 Мраморная говядина',
     items: [
       { name: 'Папа Мясника', emoji: '🍔', price: 580, desc: 'Булочка, фирменный соус, салат, томат, маринованный огурец, котлета из мраморной говядины, сыр, бекон, соус BBQ, лук свежий' },
@@ -40,6 +43,7 @@ export const MENU: MenuSection[] = [
     ],
   },
   {
+    id: 'cat-2',
     title: '🍗 Куриная грудка',
     items: [
       { name: 'Цезарь в Булочках', emoji: '🍔', price: 620, desc: 'Булочка, фирменный соус, салат, томат, огурец свежий, стейк из куриной грудки, соус цезарь, лук маринованный, сыр' },
@@ -48,6 +52,7 @@ export const MENU: MenuSection[] = [
     ],
   },
   {
+    id: 'cat-3',
     title: '📦 Горячие боксы',
     items: [
       { name: 'Бокс по-Техасски', emoji: '📦', price: 570, desc: 'Картофель фри, бекон, соус сырный, соус BBQ, зелень' },
@@ -56,6 +61,7 @@ export const MENU: MenuSection[] = [
     ],
   },
   {
+    id: 'cat-4',
     title: '🍟 Закуски',
     items: [
       { name: 'Картофель Фри 180г', emoji: '🍟', price: 180, desc: 'Классический картофель фри' },
@@ -69,6 +75,7 @@ export const MENU: MenuSection[] = [
     ],
   },
   {
+    id: 'cat-5',
     title: '🧃 Напитки',
     items: [
       { name: 'Лимонад Малина', emoji: '🧃', price: 300, desc: 'Свежий лимонад' },
@@ -78,6 +85,7 @@ export const MENU: MenuSection[] = [
     ],
   },
   {
+    id: 'cat-6',
     title: '🧂 Соусы',
     items: [
       { name: 'Барбекю', emoji: '🧂', price: 50, desc: 'Фирменный соус' },
