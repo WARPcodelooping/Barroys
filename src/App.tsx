@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import { MENU, CATEGORY_TABS, type MenuItem } from './data';
 
 type ScreenId =
@@ -10,7 +10,37 @@ type ShowFn = (id: ScreenId) => void;
 interface CartLine { item: MenuItem; qty: number; }
 interface User { name: string; phone: string; }
 
+type OrderStatus = 'sent' | 'accepted' | 'cooking' | 'ready' | 'done';
+interface Order {
+  num: string;
+  lines: CartLine[];
+  total: number;
+  status: OrderStatus;
+  date: string;
+}
+
+export const ORDER_STEPS: { key: OrderStatus; label: string; icon: string }[] = [
+  { key: 'sent', label: 'Отправлен', icon: '📤' },
+  { key: 'accepted', label: 'Принят', icon: '✓' },
+  { key: 'cooking', label: 'Готовится', icon: '🔥' },
+  { key: 'ready', label: 'Готово', icon: '📦' },
+  { key: 'done', label: 'Выдан', icon: '✅' },
+];
+
 const USER_KEY = 'barroys_user';
+const ORDER_SEQ_KEY = 'barroys_order_seq';
+
+function nextOrderNum(): string {
+  let n = 45;
+  try {
+    const raw = localStorage.getItem(ORDER_SEQ_KEY);
+    n = (raw ? parseInt(raw, 10) : 44) + 1;
+    localStorage.setItem(ORDER_SEQ_KEY, String(n));
+  } catch {
+    n = 45;
+  }
+  return '#' + String(n).padStart(3, '0');
+}
 
 function fmt(n: number) {
   return n.toLocaleString('ru-RU');
@@ -31,6 +61,8 @@ export default function App() {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [selected, setSelected] = useState<MenuItem | null>(null);
   const [showReg, setShowReg] = useState(false);
+  const [currentOrder, setCurrentOrder] = useState<Order | null>(null);
+  const [history] = useState<Order[]>([]);
 
   const show = (id: ScreenId) => setScreen(id);
 
@@ -66,8 +98,18 @@ export default function App() {
   };
 
   const checkout = () => {
-    show('confirm');
+    if (cart.length === 0) return;
+    const order: Order = {
+      num: nextOrderNum(),
+      lines: cart,
+      total: cartTotal,
+      status: 'sent',
+      date: new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) +
+        ', ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+    };
+    setCurrentOrder(order);
     setCart([]);
+    show('confirm');
   };
 
   const openItem = (item: MenuItem) => { setSelected(item); show('item'); };
@@ -92,8 +134,8 @@ export default function App() {
       />
       <ItemScreen active={screen === 'item'} show={show} item={selected} qty={selected ? qtyOf(selected.name) : 0} addToCart={addToCart} />
       <CartScreen active={screen === 'cart'} show={show} cart={cart} total={cartTotal} changeQty={changeQty} checkout={checkout} />
-      <ConfirmScreen active={screen === 'confirm'} show={show} />
-      <ProfileScreen active={screen === 'profile'} show={show} user={user} />
+      <ConfirmScreen active={screen === 'confirm'} show={show} order={currentOrder} />
+      <ProfileScreen active={screen === 'profile'} show={show} user={user} order={currentOrder} history={history} />
       <AdminOrdersScreen active={screen === 'admin-orders'} show={show} />
       <AdminProductsScreen active={screen === 'admin-products'} show={show} />
       <AdminProfileScreen active={screen === 'admin-profile'} show={show} />
@@ -344,14 +386,14 @@ function CartScreen({ active, show, cart, total, changeQty, checkout }: {
 }
 
 /* ══ ORDER CONFIRMED ══ */
-function ConfirmScreen({ active, show }: { active: boolean; show: ShowFn }) {
+function ConfirmScreen({ active, show, order }: { active: boolean; show: ShowFn; order: Order | null }) {
   return (
     <div className={screenClass(active)}>
       <div className="confirm-screen">
         <div className="confirm-icon">✓</div>
         <div className="confirm-title">ЗАКАЗ ПРИНЯТ!</div>
         <div style={{ fontSize: 13, color: 'var(--text-sec)', letterSpacing: '0.06em' }}>НОМЕР ЗАКАЗА</div>
-        <div className="confirm-order-num">#042</div>
+        <div className="confirm-order-num">{order?.num ?? '#—'}</div>
         <div className="confirm-desc">Ваш заказ передан на кухню.<br />Следите за статусом в профиле.</div>
         <button className="confirm-btn" onClick={() => show('profile')} style={{ background: 'var(--red)', border: 'none', color: 'white', fontWeight: 700, fontSize: 15 }}>Следить за заказом</button>
         <button className="confirm-btn" onClick={() => show('home')}>Вернуться в меню</button>
@@ -361,10 +403,13 @@ function ConfirmScreen({ active, show }: { active: boolean; show: ShowFn }) {
 }
 
 /* ══ PROFILE (CLIENT) ══ */
-function ProfileScreen({ active, show, user }: { active: boolean; show: ShowFn; user: User | null }) {
+function ProfileScreen({ active, show, user, order, history }: {
+  active: boolean; show: ShowFn; user: User | null; order: Order | null; history: Order[];
+}) {
   const name = user?.name || 'Гость';
   const phone = user?.phone || '';
-  const initials = name.split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+  const initials = name.split(' ').filter(Boolean).map((w) => w[0]).slice(0, 2).join('').toUpperCase() || '🙂';
+  const curIdx = order ? ORDER_STEPS.findIndex((s) => s.key === order.status) : -1;
   return (
     <div className={screenClass(active)}>
       <div className="profile-top">
@@ -375,47 +420,61 @@ function ProfileScreen({ active, show, user }: { active: boolean; show: ShowFn; 
         </div>
       </div>
       <div className="scroll-body">
-        <div className="current-order">
-          <div className="co-header">
-            <div className="co-title">Текущий заказ</div>
-            <div className="co-num">#042</div>
+        {order ? (
+          <div className="current-order">
+            <div className="co-header">
+              <div className="co-title">Текущий заказ</div>
+              <div className="co-num">{order.num}</div>
+            </div>
+            <div className="status-steps">
+              {ORDER_STEPS.map((step, i) => (
+                <Fragment key={step.key}>
+                  {i > 0 && <div className={'step-line' + (i <= curIdx ? ' done' : '')} />}
+                  <div className="step">
+                    <div className={'step-circle' + (i < curIdx ? ' done' : i === curIdx ? ' active' : '')}>
+                      {i < curIdx ? '✓' : step.icon}
+                    </div>
+                    <div className="step-label">{step.label}</div>
+                  </div>
+                </Fragment>
+              ))}
+            </div>
+            <div className="co-items">
+              {order.lines.map((l) => (
+                <div className="co-item" key={l.item.name}>
+                  <span>{l.item.name} × {l.qty}</span>
+                  <span>{fmt(l.item.price * l.qty)} ₽</span>
+                </div>
+              ))}
+            </div>
+            <div className="co-total">
+              <span>Итого</span>
+              <span>{fmt(order.total)} ₽</span>
+            </div>
           </div>
-          <div className="status-steps">
-            <div className="step"><div className="step-circle done">✓</div><div className="step-label">Принят</div></div>
-            <div className="step-line done" />
-            <div className="step"><div className="step-circle active">🔥</div><div className="step-label">Готовится</div></div>
-            <div className="step-line" />
-            <div className="step"><div className="step-circle">📦</div><div className="step-label">Готово</div></div>
-            <div className="step-line" />
-            <div className="step"><div className="step-circle">✅</div><div className="step-label">Выдан</div></div>
+        ) : (
+          <div className="no-order">
+            <div className="no-order-emoji">🍔</div>
+            <div className="no-order-title">Нет активных заказов</div>
+            <div className="no-order-sub">Сделайте заказ — он появится здесь</div>
+            <button className="cart-empty-btn" onClick={() => show('home')}>Перейти в меню</button>
           </div>
-          <div className="co-items">
-            <div className="co-item"><span>Вишня на конце × 1</span><span>610 ₽</span></div>
-            <div className="co-item"><span>Рулон Гриль × 1</span><span>420 ₽</span></div>
-          </div>
-          <div className="co-total">
-            <span>Итого</span>
-            <span>1 030 ₽</span>
-          </div>
-        </div>
+        )}
+
         <div className="orders-history-title">История заказов</div>
-        <div className="history-items">
-          <div className="history-card">
-            <div className="hc-top"><span className="hc-num">#038</span><span className="hc-date">19 июня, 18:42</span></div>
-            <div className="hc-items">Папа Мясника × 1, Картофель Фри × 2, Лимонад × 1</div>
-            <div className="hc-bottom"><span className="hc-total">1 040 ₽</span><span className="status-pill done">Выдан</span></div>
+        {history.length === 0 ? (
+          <div className="history-empty">Пока пусто — здесь будут ваши прошлые заказы</div>
+        ) : (
+          <div className="history-items">
+            {history.map((o) => (
+              <div className="history-card" key={o.num}>
+                <div className="hc-top"><span className="hc-num">{o.num}</span><span className="hc-date">{o.date}</span></div>
+                <div className="hc-items">{o.lines.map((l) => `${l.item.name} × ${l.qty}`).join(', ')}</div>
+                <div className="hc-bottom"><span className="hc-total">{fmt(o.total)} ₽</span><span className="status-pill done">Выдан</span></div>
+              </div>
+            ))}
           </div>
-          <div className="history-card">
-            <div className="hc-top"><span className="hc-num">#031</span><span className="hc-date">14 июня, 20:15</span></div>
-            <div className="hc-items">Горячий Мексиканец × 1, Луковые кольца × 1</div>
-            <div className="hc-bottom"><span className="hc-total">870 ₽</span><span className="status-pill done">Выдан</span></div>
-          </div>
-          <div className="history-card">
-            <div className="hc-top"><span className="hc-num">#024</span><span className="hc-date">8 июня, 13:30</span></div>
-            <div className="hc-items">American Boy × 2</div>
-            <div className="hc-bottom"><span className="hc-total">1 120 ₽</span><span className="status-pill cancelled">Отменён</span></div>
-          </div>
-        </div>
+        )}
         <div style={{ height: 24 }} />
       </div>
       <div className="bottom-nav">
