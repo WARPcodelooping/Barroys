@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { MENU, CATEGORY_TABS } from './data';
 
 type ScreenId =
@@ -54,7 +54,7 @@ export default function App() {
 
 type ShowFn = (id: ScreenId) => void;
 
-function SwBtn({ id, cur, show, children }: { id: ScreenId; cur: ScreenId; show: ShowFn; children: React.ReactNode }) {
+function SwBtn({ id, cur, show, children }: { id: ScreenId; cur: ScreenId; show: ShowFn; children: ReactNode }) {
   return (
     <button className={'sw-btn' + (cur === id ? ' active' : '')} onClick={() => show(id)}>
       {children}
