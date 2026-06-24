@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { MENU, CATEGORY_TABS } from './data';
 
 type ScreenId =
@@ -9,35 +9,18 @@ export default function App() {
   const [screen, setScreen] = useState<ScreenId>('auth');
   const show = (id: ScreenId) => setScreen(id);
 
+  const isAdmin = screen.startsWith('admin-');
+
   return (
-    <>
-      <div className="app-label">БАРРОЙС БУРГЕР · MINI APP</div>
+    <div className="phone">
+      {/* Превью-переключатель роли (временный, уберём когда роль будет по Telegram ID) */}
+      <button
+        className="role-toggle"
+        onClick={() => show(isAdmin ? 'auth' : 'admin-orders')}
+      >
+        {isAdmin ? '👤 Клиент' : '⚙️ Админ'}
+      </button>
 
-      {/* Switcher */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 420, width: '100%' }}>
-        <div className="sw-group">
-          <div className="sw-label">👤 Клиент</div>
-          <div className="sw-row">
-            <SwBtn id="auth" cur={screen} show={show}>Авторизация</SwBtn>
-            <SwBtn id="home" cur={screen} show={show}>Каталог</SwBtn>
-            <SwBtn id="item" cur={screen} show={show}>Товар</SwBtn>
-            <SwBtn id="cart" cur={screen} show={show}>Корзина</SwBtn>
-            <SwBtn id="confirm" cur={screen} show={show}>Заказ принят</SwBtn>
-            <SwBtn id="profile" cur={screen} show={show}>Профиль</SwBtn>
-          </div>
-        </div>
-        <div className="sw-group">
-          <div className="sw-label">⚙️ Админ</div>
-          <div className="sw-row">
-            <SwBtn id="admin-orders" cur={screen} show={show}>Заказы</SwBtn>
-            <SwBtn id="admin-products" cur={screen} show={show}>Товары</SwBtn>
-            <SwBtn id="admin-profile" cur={screen} show={show}>Настройки</SwBtn>
-          </div>
-        </div>
-      </div>
-
-      {/* Phone */}
-      <div className="phone">
         <AuthScreen active={screen === 'auth'} show={show} />
         <HomeScreen active={screen === 'home'} show={show} />
         <ItemScreen active={screen === 'item'} show={show} />
@@ -47,20 +30,11 @@ export default function App() {
         <AdminOrdersScreen active={screen === 'admin-orders'} show={show} />
         <AdminProductsScreen active={screen === 'admin-products'} show={show} />
         <AdminProfileScreen active={screen === 'admin-profile'} show={show} />
-      </div>
-    </>
+    </div>
   );
 }
 
 type ShowFn = (id: ScreenId) => void;
-
-function SwBtn({ id, cur, show, children }: { id: ScreenId; cur: ScreenId; show: ShowFn; children: ReactNode }) {
-  return (
-    <button className={'sw-btn' + (cur === id ? ' active' : '')} onClick={() => show(id)}>
-      {children}
-    </button>
-  );
-}
 
 function screenClass(active: boolean) {
   return 'screen' + (active ? ' active' : '');
