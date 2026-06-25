@@ -30,16 +30,17 @@ export const ORDER_STEPS: { key: OrderStatus; label: string; icon: string }[] = 
 const USER_KEY = 'barroys_user';
 const ORDER_SEQ_KEY = 'barroys_order_seq';
 
+// М = мобильный заказ. Нумерация: М01, М02, ...
 function nextOrderNum(): string {
-  let n = 45;
+  let n = 1;
   try {
     const raw = localStorage.getItem(ORDER_SEQ_KEY);
-    n = (raw ? parseInt(raw, 10) : 44) + 1;
+    n = (raw ? parseInt(raw, 10) : 0) + 1;
     localStorage.setItem(ORDER_SEQ_KEY, String(n));
   } catch {
-    n = 45;
+    n = 1;
   }
-  return '#' + String(n).padStart(3, '0');
+  return 'М' + String(n).padStart(2, '0');
 }
 
 function fmt(n: number) {
@@ -393,7 +394,7 @@ function ConfirmScreen({ active, show, order }: { active: boolean; show: ShowFn;
         <div className="confirm-icon">✓</div>
         <div className="confirm-title">ЗАКАЗ ПРИНЯТ!</div>
         <div style={{ fontSize: 13, color: 'var(--text-sec)', letterSpacing: '0.06em' }}>НОМЕР ЗАКАЗА</div>
-        <div className="confirm-order-num">{order?.num ?? '#—'}</div>
+        <div className="confirm-order-num">{order?.num ?? 'М—'}</div>
         <div className="confirm-desc">Ваш заказ передан на кухню.<br />Следите за статусом в профиле.</div>
         <button className="confirm-btn" onClick={() => show('profile')} style={{ background: 'var(--red)', border: 'none', color: 'white', fontWeight: 700, fontSize: 15 }}>Следить за заказом</button>
         <button className="confirm-btn" onClick={() => show('home')}>Вернуться в меню</button>
