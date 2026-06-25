@@ -543,13 +543,19 @@ function AdminOrdersScreen({ active, show, orders, updateStatus }: {
 }) {
   const [filter, setFilter] = useState(0);
   const filters: { label: string; match: (s: OrderStatus) => boolean }[] = [
-    { label: 'Все', match: (s) => s !== 'done' },
-    { label: 'Ожидают ✋', match: (s) => s === 'sent' || s === 'accepted' },
-    { label: 'Готовятся 🔥', match: (s) => s === 'cooking' },
-    { label: 'Готово 📦', match: (s) => s === 'ready' },
+    { label: 'Все', match: () => true },
+    { label: '📤 Отправлен', match: (s) => s === 'sent' },
+    { label: '✓ Принят', match: (s) => s === 'accepted' },
+    { label: '🔥 Готовится', match: (s) => s === 'cooking' },
+    { label: '📦 Готово', match: (s) => s === 'ready' },
+    { label: '✅ Выдан', match: (s) => s === 'done' },
   ];
   const activeCount = orders.filter((o) => o.status !== 'done').length;
-  const list = orders.filter((o) => filters[filter].match(o.status));
+  // Порядок статусов для сортировки: отправлен → принят → готовится → готово → выдан
+  const order: Record<OrderStatus, number> = { sent: 0, accepted: 1, cooking: 2, ready: 3, done: 4 };
+  const list = orders
+    .filter((o) => filters[filter].match(o.status))
+    .sort((a, b) => (order[a.status] - order[b.status]) || (b.ts - a.ts));
 
   return (
     <div className={screenClass(active)}>
