@@ -544,11 +544,10 @@ function AdminOrdersScreen({ active, show, orders, updateStatus }: {
   const [filter, setFilter] = useState(0);
   const filters: { label: string; match: (s: OrderStatus) => boolean }[] = [
     { label: 'Все', match: () => true },
-    { label: '📤 Отправлен', match: (s) => s === 'sent' },
-    { label: '✓ Принят', match: (s) => s === 'accepted' },
-    { label: '🔥 Готовится', match: (s) => s === 'cooking' },
-    { label: '📦 Готово', match: (s) => s === 'ready' },
-    { label: '✅ Выдан', match: (s) => s === 'done' },
+    { label: '✋ Принять', match: (s) => s === 'sent' || s === 'accepted' },
+    { label: '🔥 Готовятся', match: (s) => s === 'cooking' },
+    { label: '📦 К выдаче', match: (s) => s === 'ready' },
+    { label: '✅ Выданы', match: (s) => s === 'done' },
   ];
   const activeCount = orders.filter((o) => o.status !== 'done').length;
   // Порядок статусов для сортировки: отправлен → принят → готовится → готово → выдан
