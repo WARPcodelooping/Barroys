@@ -770,3 +770,77 @@ body {
   font-size: 22px; letter-spacing: 0.05em; color: var(--text);
 }
 .admin-empty-sub { font-size: 13px; color: var(--text-sec); line-height: 1.5; }
+
+/* ══ Корзина: оформление заказа ══ */
+.cart-section-label {
+  font-size: 11px; font-weight: 700; color: var(--text-sec);
+  text-transform: uppercase; letter-spacing: 0.1em;
+  padding: 0 20px; margin: 18px 0 8px;
+}
+.seg { display: flex; gap: 8px; padding: 0 20px; }
+.seg-btn {
+  flex: 1; background: var(--bg2); border: 1px solid var(--border);
+  border-radius: 12px; padding: 12px 8px;
+  font-size: 13px; font-weight: 600; color: var(--text-sec);
+  cursor: pointer; transition: all 0.15s; font-family: 'Inter', sans-serif;
+}
+.seg-btn.active { background: var(--red); border-color: var(--red); color: white; }
+.cart-input {
+  width: calc(100% - 40px); margin: 8px 20px 0;
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 12px; padding: 13px 14px;
+  font-size: 14px; color: var(--text); font-family: 'Inter', sans-serif;
+}
+.cart-input::placeholder { color: var(--text-sec); }
+.cart-textarea {
+  width: calc(100% - 40px); margin: 0 20px;
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 12px; padding: 12px 14px;
+  font-size: 14px; color: var(--text); resize: none; min-height: 64px;
+  font-family: 'Inter', sans-serif;
+}
+.cart-textarea::placeholder { color: var(--text-sec); }
+.free-hint {
+  margin: 14px 20px 0; padding: 10px 14px;
+  background: var(--green-bg); border: 1px solid rgba(61,214,140,0.25);
+  border-radius: 10px; font-size: 12px; color: var(--green); text-align: center;
+}
+.free-hint strong { color: var(--green); }
+.min-hint {
+  margin: 10px 20px 0; padding: 10px 14px;
+  background: rgba(212,43,43,0.1); border: 1px solid rgba(212,43,43,0.25);
+  border-radius: 10px; font-size: 12px; color: var(--red); text-align: center; font-weight: 600;
+}
+.pay-btn:disabled { opacity: 0.4; cursor: not-allowed; box-shadow: none; }
+
+/* ══ Профиль: мета и повтор ══ */
+.co-meta {
+  font-size: 12px; color: var(--text-sec);
+  padding: 8px 0 0; line-height: 1.5;
+}
+.repeat-btn {
+  background: var(--bg3); border: 1px solid var(--red);
+  border-radius: 9px; padding: 7px 14px;
+  font-size: 12px; font-weight: 700; color: var(--red);
+  cursor: pointer; font-family: 'Inter', sans-serif;
+}
+.repeat-btn:hover { background: var(--red); color: white; }
+
+/* ══ Админ: статистика ══ */
+.stats-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.stat {
+  flex: 1; background: var(--bg3); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 8px; text-align: center;
+}
+.stat-num {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 22px; color: var(--text); letter-spacing: 0.03em; line-height: 1;
+}
+.stat-label { font-size: 10px; color: var(--text-sec); margin-top: 4px; }
+
+/* ══ Админ: заказ — доп.строки ══ */
+.aoc-method { font-size: 14px; }
+.aoc-extra { font-size: 12px; color: var(--text-sec); margin-bottom: 3px; line-height: 1.4; }
+
+/* select как input */
+select.modal-input { appearance: none; cursor: pointer; }

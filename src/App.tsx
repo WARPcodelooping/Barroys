@@ -1,5 +1,8 @@
-import { useState, useEffect, Fragment } from 'react';
-import { MENU, CATEGORY_TABS, type MenuItem } from './data';
+import { useState, useEffect, useRef, Fragment } from 'react';
+import {
+  CATEGORY_TABS, CATEGORIES, PRODUCTS, DELIVERY, DEFAULT_SETTINGS,
+  type Product, type Settings,
+} from './data';
 
 type ScreenId =
   | 'auth' | 'home' | 'item' | 'cart' | 'confirm' | 'profile'
@@ -7,18 +10,32 @@ type ScreenId =
 
 type ShowFn = (id: ScreenId) => void;
 
-interface CartLine { item: MenuItem; qty: number; }
+interface CartLine { item: Product; qty: number; }
 interface User { name: string; phone: string; }
+
+type Method = 'pickup' | 'delivery';
+interface OrderDetails {
+  method: Method;
+  address: string;
+  whenText: string;
+  comment: string;
+}
 
 type OrderStatus = 'sent' | 'accepted' | 'cooking' | 'ready' | 'done';
 interface Order {
   num: string;
   lines: CartLine[];
+  itemsTotal: number;
+  deliveryFee: number;
   total: number;
   status: OrderStatus;
   date: string;
-  ts: number;                       // время создания (ms) — для «N мин назад»
+  ts: number;
   client: { name: string; phone: string };
+  method: Method;
+  address: string;
+  whenText: string;
+  comment: string;
 }
 
 export const ORDER_STEPS: { key: OrderStatus; label: string; icon: string }[] = [
@@ -32,6 +49,8 @@ export const ORDER_STEPS: { key: OrderStatus; label: string; icon: string }[] = 
 const USER_KEY = 'barroys_user';
 const ORDER_SEQ_KEY = 'barroys_order_seq';
 const ORDERS_KEY = 'barroys_orders';
+const PRODUCTS_KEY = 'barroys_products';
+const SETTINGS_KEY = 'barroys_settings';
 
 function todayKey(): string {
   return new Date().toLocaleDateString('ru-RU');
@@ -51,16 +70,19 @@ function nextOrderNum(): string {
   return 'М' + String(seq).padStart(2, '0');
 }
 
-function loadOrders(): Order[] {
+function loadJSON<T>(key: string, fallback: T): T {
   try {
-    const raw = localStorage.getItem(ORDERS_KEY);
-    if (!raw) return [];
-    const all = JSON.parse(raw) as Order[];
-    // Только сегодняшние заказы — вчерашние не висят в админке
-    return all.filter((o) => new Date(o.ts).toLocaleDateString('ru-RU') === todayKey());
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
   } catch {
-    return [];
+    return fallback;
   }
+}
+
+function loadOrders(): Order[] {
+  return loadJSON<Order[]>(ORDERS_KEY, []).filter(
+    (o) => new Date(o.ts).toLocaleDateString('ru-RU') === todayKey(),
+  );
 }
 
 function relativeTime(ts: number): string {
@@ -74,29 +96,50 @@ function fmt(n: number) {
   return n.toLocaleString('ru-RU');
 }
 
-function loadUser(): User | null {
+function isOpenNow(s: Settings): boolean {
+  if (!s.open) return false;
+  const now = new Date();
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const [fh, fm] = s.workFrom.split(':').map(Number);
+  const [th, tm] = s.workTo.split(':').map(Number);
+  return fh * 60 + fm <= cur && cur < th * 60 + tm;
+}
+
+// Звук + вибрация при новом заказе (локально; настоящий пуш будет с бэкендом)
+function notifyNewOrder() {
   try {
-    const raw = localStorage.getItem(USER_KEY);
-    return raw ? (JSON.parse(raw) as User) : null;
-  } catch {
-    return null;
-  }
+    const Ctx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    const ctx = new Ctx();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.type = 'sine'; o.frequency.value = 880; g.gain.value = 0.12;
+    o.start(); o.stop(ctx.currentTime + 0.18);
+  } catch { /* ignore */ }
+  try { (window as any)?.Telegram?.WebApp?.HapticFeedback?.notificationOccurred?.('success'); } catch { /* ignore */ }
 }
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(loadUser);
-  const [screen, setScreen] = useState<ScreenId>(() => (loadUser() ? 'home' : 'auth'));
+  const [user, setUser] = useState<User | null>(() => loadJSON<User | null>(USER_KEY, null));
+  const [screen, setScreen] = useState<ScreenId>(() => (localStorage.getItem(USER_KEY) ? 'home' : 'auth'));
   const [cart, setCart] = useState<CartLine[]>([]);
-  const [selected, setSelected] = useState<MenuItem | null>(null);
+  const [selected, setSelected] = useState<Product | null>(null);
   const [showReg, setShowReg] = useState(false);
   const [orders, setOrders] = useState<Order[]>(loadOrders);
+  const [products, setProducts] = useState<Product[]>(() => loadJSON<Product[]>(PRODUCTS_KEY, PRODUCTS));
+  const [settings, setSettings] = useState<Settings>(() => loadJSON<Settings>(SETTINGS_KEY, DEFAULT_SETTINGS));
 
-  // Заказы храним в localStorage — так клиент и админка видят одно и то же
+  useEffect(() => { try { localStorage.setItem(ORDERS_KEY, JSON.stringify(orders)); } catch { /* ignore */ } }, [orders]);
+  useEffect(() => { try { localStorage.setItem(PRODUCTS_KEY, JSON.stringify(products)); } catch { /* ignore */ } }, [products]);
+  useEffect(() => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* ignore */ } }, [settings]);
+
+  // Звук при появлении нового заказа
+  const prevCount = useRef(orders.length);
   useEffect(() => {
-    try { localStorage.setItem(ORDERS_KEY, JSON.stringify(orders)); } catch { /* ignore */ }
-  }, [orders]);
+    if (orders.length > prevCount.current && settings.notifyNew) notifyNewOrder();
+    prevCount.current = orders.length;
+  }, [orders.length, settings.notifyNew]);
 
-  // Текущий заказ клиента — самый свежий ещё не выданный; история — выданные
   const currentOrder = orders.find((o) => o.status !== 'done') ?? null;
   const history = orders.filter((o) => o.status === 'done');
 
@@ -107,46 +150,43 @@ export default function App() {
   const show = (id: ScreenId) => setScreen(id);
 
   const cartCount = cart.reduce((s, l) => s + l.qty, 0);
-  const cartTotal = cart.reduce((s, l) => s + l.qty * l.item.price, 0);
+  const itemsTotal = cart.reduce((s, l) => s + l.qty * l.item.price, 0);
 
-  const addToCart = (item: MenuItem, n = 1) => {
+  const addToCart = (item: Product, n = 1) => {
     setCart((prev) => {
-      const ex = prev.find((l) => l.item.name === item.name);
-      if (ex) return prev.map((l) => (l.item.name === item.name ? { ...l, qty: l.qty + n } : l));
+      const ex = prev.find((l) => l.item.id === item.id);
+      if (ex) return prev.map((l) => (l.item.id === item.id ? { ...l, qty: l.qty + n } : l));
       return [...prev, { item, qty: n }];
     });
   };
-  const changeQty = (name: string, delta: number) => {
-    setCart((prev) =>
-      prev
-        .map((l) => (l.item.name === name ? { ...l, qty: l.qty + delta } : l))
-        .filter((l) => l.qty > 0),
-    );
+  const changeQty = (id: string, delta: number) => {
+    setCart((prev) => prev.map((l) => (l.item.id === id ? { ...l, qty: l.qty + delta } : l)).filter((l) => l.qty > 0));
   };
-  const qtyOf = (name: string) => cart.find((l) => l.item.name === name)?.qty ?? 0;
+  const qtyOf = (id: string) => cart.find((l) => l.item.id === id)?.qty ?? 0;
 
-  // Авторизация: если новый клиент — открываем регистрацию, иначе сразу в меню
-  const onLogin = () => {
-    if (user) { show('home'); return; }
-    setShowReg(true);
-  };
+  const onLogin = () => { if (user) { show('home'); return; } setShowReg(true); };
   const onRegister = (u: User) => {
     localStorage.setItem(USER_KEY, JSON.stringify(u));
-    setUser(u);
-    setShowReg(false);
-    show('home');
+    setUser(u); setShowReg(false); show('home');
   };
 
-  const checkout = () => {
+  const checkout = (d: OrderDetails) => {
     if (cart.length === 0) return;
     const now = Date.now();
+    const deliveryFee = d.method === 'delivery' && itemsTotal < DELIVERY.freeFrom ? DELIVERY.fee : 0;
     const order: Order = {
       num: nextOrderNum(),
       lines: cart,
-      total: cartTotal,
+      itemsTotal,
+      deliveryFee,
+      total: itemsTotal + deliveryFee,
       status: 'sent',
       ts: now,
       client: { name: user?.name ?? 'Гость', phone: user?.phone ?? '' },
+      method: d.method,
+      address: d.address,
+      whenText: d.whenText,
+      comment: d.comment,
       date: new Date(now).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) +
         ', ' + new Date(now).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
     };
@@ -155,33 +195,36 @@ export default function App() {
     show('confirm');
   };
 
-  const openItem = (item: MenuItem) => { setSelected(item); show('item'); };
+  // Повторить заказ из истории
+  const repeatOrder = (o: Order) => {
+    setCart(o.lines.map((l) => ({ item: l.item, qty: l.qty })));
+    show('cart');
+  };
+
+  const openItem = (item: Product) => { setSelected(item); show('item'); };
 
   const isAdmin = screen.startsWith('admin-');
+  const open = isOpenNow(settings);
 
   return (
     <div className="phone">
-      {/* Превью-переключатель роли (временный, уберём когда роль будет по Telegram ID) */}
       <button className="role-toggle" onClick={() => show(isAdmin ? 'home' : 'admin-orders')}>
         {isAdmin ? '👤 Клиент' : '⚙️ Админ'}
       </button>
 
       <AuthScreen active={screen === 'auth'} onLogin={onLogin} />
       <HomeScreen
-        active={screen === 'home'}
-        show={show}
-        addToCart={addToCart}
-        openItem={openItem}
-        cartCount={cartCount}
-        cartTotal={cartTotal}
+        active={screen === 'home'} show={show} products={products}
+        addToCart={addToCart} openItem={openItem}
+        cartCount={cartCount} cartTotal={itemsTotal} open={open} workTo={settings.workTo}
       />
-      <ItemScreen active={screen === 'item'} show={show} item={selected} qty={selected ? qtyOf(selected.name) : 0} addToCart={addToCart} />
-      <CartScreen active={screen === 'cart'} show={show} cart={cart} total={cartTotal} changeQty={changeQty} checkout={checkout} />
+      <ItemScreen active={screen === 'item'} show={show} item={selected} qty={selected ? qtyOf(selected.id) : 0} addToCart={addToCart} />
+      <CartScreen active={screen === 'cart'} show={show} cart={cart} itemsTotal={itemsTotal} changeQty={changeQty} checkout={checkout} />
       <ConfirmScreen active={screen === 'confirm'} show={show} order={currentOrder} />
-      <ProfileScreen active={screen === 'profile'} show={show} user={user} order={currentOrder} history={history} />
+      <ProfileScreen active={screen === 'profile'} show={show} user={user} order={currentOrder} history={history} repeatOrder={repeatOrder} />
       <AdminOrdersScreen active={screen === 'admin-orders'} show={show} orders={orders} updateStatus={updateStatus} />
-      <AdminProductsScreen active={screen === 'admin-products'} show={show} />
-      <AdminProfileScreen active={screen === 'admin-profile'} show={show} />
+      <AdminProductsScreen active={screen === 'admin-products'} show={show} products={products} setProducts={setProducts} />
+      <AdminProfileScreen active={screen === 'admin-profile'} show={show} settings={settings} setSettings={setSettings} orders={orders} />
 
       {showReg && <RegisterModal onSubmit={onRegister} onClose={() => setShowReg(false)} />}
     </div>
@@ -196,9 +239,7 @@ function screenClass(active: boolean) {
 function RegisterModal({ onSubmit, onClose }: { onSubmit: (u: User) => void; onClose: () => void }) {
   const tg = (window as any)?.Telegram?.WebApp;
   const tgUser = tg?.initDataUnsafe?.user;
-  const [name, setName] = useState<string>(
-    tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ') : '',
-  );
+  const [name, setName] = useState<string>(tgUser ? [tgUser.first_name, tgUser.last_name].filter(Boolean).join(' ') : '');
   const [phone, setPhone] = useState('');
 
   const shareViaTelegram = () => {
@@ -220,21 +261,10 @@ function RegisterModal({ onSubmit, onClose }: { onSubmit: (u: User) => void; onC
         <div className="modal-sub">Заполните данные — это нужно только один раз</div>
 
         <label className="modal-label">Имя</label>
-        <input
-          className="modal-input"
-          placeholder="Как вас зовут?"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
+        <input className="modal-input" placeholder="Как вас зовут?" value={name} onChange={(e) => setName(e.target.value)} />
 
         <label className="modal-label">Телефон</label>
-        <input
-          className="modal-input"
-          placeholder="+7 (___) ___-__-__"
-          inputMode="tel"
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-        />
+        <input className="modal-input" placeholder="+7 (___) ___-__-__" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} />
         {tg?.requestContact && (
           <button className="modal-tg-share" onClick={shareViaTelegram}>📱 Взять номер из Telegram</button>
         )}
@@ -267,15 +297,18 @@ function AuthScreen({ active, onLogin }: { active: boolean; onLogin: () => void 
 }
 
 /* ══ HOME / CATALOG ══ */
-function HomeScreen({ active, show, addToCart, openItem, cartCount, cartTotal }: {
-  active: boolean; show: ShowFn; addToCart: (i: MenuItem) => void; openItem: (i: MenuItem) => void;
-  cartCount: number; cartTotal: number;
+function HomeScreen({ active, show, products, addToCart, openItem, cartCount, cartTotal, open, workTo }: {
+  active: boolean; show: ShowFn; products: Product[];
+  addToCart: (i: Product) => void; openItem: (i: Product) => void;
+  cartCount: number; cartTotal: number; open: boolean; workTo: string;
 }) {
   const [tab, setTab] = useState(0);
+  const sections = CATEGORIES.map((c) => ({ ...c, items: products.filter((p) => p.cat === c.id) }))
+    .filter((s) => s.items.length > 0);
 
   const goCategory = (i: number) => {
     setTab(i);
-    const el = document.getElementById(MENU[i].id);
+    const el = document.getElementById(CATEGORIES[i].id);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -284,7 +317,9 @@ function HomeScreen({ active, show, addToCart, openItem, cartCount, cartTotal }:
       <div className="home-header">
         <div className="home-topbar">
           <div className="home-logo">БАРР<span>🍔</span>ЙС</div>
-          <div className="open-badge open"><div className="dot" />Открыто до 23:00</div>
+          <div className={'open-badge ' + (open ? 'open' : 'closed')}>
+            <div className="dot" />{open ? `Открыто до ${workTo}` : 'Закрыто'}
+          </div>
         </div>
       </div>
       <div className="cat-tabs">
@@ -293,12 +328,12 @@ function HomeScreen({ active, show, addToCart, openItem, cartCount, cartTotal }:
         ))}
       </div>
       <div className="scroll-body" style={{ paddingBottom: cartCount > 0 ? 80 : 16 }}>
-        {MENU.map((section) => (
+        {sections.map((section) => (
           <div className="menu-section" id={section.id} key={section.id}>
             <div className="menu-section-title">{section.title}</div>
             <div className="menu-items">
               {section.items.map((it) => (
-                <div className="menu-item" key={it.name} onClick={() => openItem(it)}>
+                <div className="menu-item" key={it.id} onClick={() => openItem(it)}>
                   <div className="menu-item-img">{it.emoji}</div>
                   <div className="menu-item-info">
                     <div>
@@ -340,7 +375,7 @@ function HomeScreen({ active, show, addToCart, openItem, cartCount, cartTotal }:
 
 /* ══ ITEM DETAIL ══ */
 function ItemScreen({ active, show, item, qty, addToCart }: {
-  active: boolean; show: ShowFn; item: MenuItem | null; qty: number; addToCart: (i: MenuItem, n: number) => void;
+  active: boolean; show: ShowFn; item: Product | null; qty: number; addToCart: (i: Product, n: number) => void;
 }) {
   const [n, setN] = useState(1);
   useEffect(() => { setN(1); }, [item]);
@@ -375,11 +410,33 @@ function ItemScreen({ active, show, item, qty, addToCart }: {
 }
 
 /* ══ CART ══ */
-function CartScreen({ active, show, cart, total, changeQty, checkout }: {
-  active: boolean; show: ShowFn; cart: CartLine[]; total: number;
-  changeQty: (name: string, delta: number) => void; checkout: () => void;
+function CartScreen({ active, show, cart, itemsTotal, changeQty, checkout }: {
+  active: boolean; show: ShowFn; cart: CartLine[]; itemsTotal: number;
+  changeQty: (id: string, delta: number) => void; checkout: (d: OrderDetails) => void;
 }) {
+  const [method, setMethod] = useState<Method>('pickup');
+  const [address, setAddress] = useState('');
+  const [asap, setAsap] = useState(true);
+  const [time, setTime] = useState('');
+  const [comment, setComment] = useState('');
+
   const empty = cart.length === 0;
+  const deliveryFee = method === 'delivery' && itemsTotal < DELIVERY.freeFrom ? DELIVERY.fee : 0;
+  const total = itemsTotal + deliveryFee;
+  const belowMin = itemsTotal < DELIVERY.minOrder;
+  const toFree = DELIVERY.freeFrom - itemsTotal;
+  const addressOk = method === 'pickup' || address.trim().length >= 5;
+  const canPay = !empty && !belowMin && addressOk;
+
+  const onPay = () => {
+    checkout({
+      method,
+      address: method === 'delivery' ? address.trim() : '',
+      whenText: asap ? 'Как можно скорее' : (time ? `Ко времени ${time}` : 'Ко времени'),
+      comment: comment.trim(),
+    });
+  };
+
   return (
     <div className={screenClass(active)}>
       <div className="cart-header">
@@ -397,24 +454,64 @@ function CartScreen({ active, show, cart, total, changeQty, checkout }: {
           <>
             <div className="cart-items">
               {cart.map((l) => (
-                <div className="cart-item" key={l.item.name}>
+                <div className="cart-item" key={l.item.id}>
                   <div className="cart-item-img">{l.item.emoji}</div>
                   <div className="cart-item-info">
                     <div className="cart-item-name">{l.item.name}</div>
                     <div className="cart-item-price">{fmt(l.item.price * l.qty)} ₽</div>
                   </div>
                   <div className="cart-item-controls">
-                    <button className="ci-btn" onClick={() => changeQty(l.item.name, -1)}>−</button>
+                    <button className="ci-btn" onClick={() => changeQty(l.item.id, -1)}>−</button>
                     <span className="ci-qty">{l.qty}</span>
-                    <button className="ci-btn" onClick={() => changeQty(l.item.name, +1)}>+</button>
+                    <button className="ci-btn" onClick={() => changeQty(l.item.id, +1)}>+</button>
                   </div>
                 </div>
               ))}
             </div>
+
+            {/* Способ получения */}
+            <div className="cart-section-label">Способ получения</div>
+            <div className="seg">
+              <button className={'seg-btn' + (method === 'pickup' ? ' active' : '')} onClick={() => setMethod('pickup')}>🏃 Самовывоз</button>
+              <button className={'seg-btn' + (method === 'delivery' ? ' active' : '')} onClick={() => setMethod('delivery')}>🛵 Доставка</button>
+            </div>
+            {method === 'delivery' && (
+              <input className="cart-input" placeholder="Адрес доставки (улица, дом, кв.)" value={address} onChange={(e) => setAddress(e.target.value)} />
+            )}
+
+            {/* Время */}
+            <div className="cart-section-label">Когда</div>
+            <div className="seg">
+              <button className={'seg-btn' + (asap ? ' active' : '')} onClick={() => setAsap(true)}>⚡ Как можно скорее</button>
+              <button className={'seg-btn' + (!asap ? ' active' : '')} onClick={() => setAsap(false)}>🕐 Ко времени</button>
+            </div>
+            {!asap && (
+              <input className="cart-input" type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+            )}
+
+            {/* Комментарий */}
+            <div className="cart-section-label">Комментарий к заказу</div>
+            <textarea className="cart-textarea" placeholder="Например: без лука, соус отдельно, поострее 🌶" value={comment} onChange={(e) => setComment(e.target.value)} />
+
+            {/* Прогресс до бесплатной доставки */}
+            {method === 'delivery' && toFree > 0 && (
+              <div className="free-hint">До бесплатной доставки ещё <strong>{fmt(toFree)} ₽</strong></div>
+            )}
+
             <div className="divider" />
-            <div className="cart-total-row"><span className="cart-total-label">Товары</span><span className="cart-total-val">{fmt(total)} ₽</span></div>
+            <div className="cart-total-row"><span className="cart-total-label">Товары</span><span className="cart-total-val">{fmt(itemsTotal)} ₽</span></div>
+            {method === 'delivery' && (
+              <div className="cart-total-row">
+                <span className="cart-total-label">Доставка</span>
+                <span className="cart-total-val">{deliveryFee === 0 ? 'бесплатно' : fmt(deliveryFee) + ' ₽'}</span>
+              </div>
+            )}
             <div className="cart-total-row big"><span className="cart-total-label">Итого</span><span className="cart-total-val">{fmt(total)} ₽</span></div>
-            <button className="pay-btn" onClick={checkout}>💳 Оплатить {fmt(total)} ₽</button>
+
+            {belowMin && <div className="min-hint">Минимальный заказ — {fmt(DELIVERY.minOrder)} ₽</div>}
+            {!addressOk && !belowMin && <div className="min-hint">Укажите адрес доставки</div>}
+
+            <button className="pay-btn" disabled={!canPay} onClick={onPay}>💳 Оплатить {fmt(total)} ₽</button>
             <div style={{ height: 24 }} />
           </>
         )}
@@ -437,7 +534,10 @@ function ConfirmScreen({ active, show, order }: { active: boolean; show: ShowFn;
         <div className="confirm-title">ЗАКАЗ ПРИНЯТ!</div>
         <div style={{ fontSize: 13, color: 'var(--text-sec)', letterSpacing: '0.06em' }}>НОМЕР ЗАКАЗА</div>
         <div className="confirm-order-num">{order?.num ?? 'М—'}</div>
-        <div className="confirm-desc">Ваш заказ передан на кухню.<br />Следите за статусом в профиле.</div>
+        <div className="confirm-desc">
+          {order?.method === 'delivery' ? '🛵 Доставка' : '🏃 Самовывоз'}{order?.whenText ? ' · ' + order.whenText : ''}<br />
+          Ваш заказ передан на кухню. Следите за статусом в профиле.
+        </div>
         <button className="confirm-btn" onClick={() => show('profile')} style={{ background: 'var(--red)', border: 'none', color: 'white', fontWeight: 700, fontSize: 15 }}>Следить за заказом</button>
         <button className="confirm-btn" onClick={() => show('home')}>Вернуться в меню</button>
       </div>
@@ -446,8 +546,8 @@ function ConfirmScreen({ active, show, order }: { active: boolean; show: ShowFn;
 }
 
 /* ══ PROFILE (CLIENT) ══ */
-function ProfileScreen({ active, show, user, order, history }: {
-  active: boolean; show: ShowFn; user: User | null; order: Order | null; history: Order[];
+function ProfileScreen({ active, show, user, order, history, repeatOrder }: {
+  active: boolean; show: ShowFn; user: User | null; order: Order | null; history: Order[]; repeatOrder: (o: Order) => void;
 }) {
   const name = user?.name || 'Гость';
   const phone = user?.phone || '';
@@ -482,9 +582,11 @@ function ProfileScreen({ active, show, user, order, history }: {
                 </Fragment>
               ))}
             </div>
+            <div className="co-meta">{order.method === 'delivery' ? `🛵 Доставка: ${order.address || '—'}` : '🏃 Самовывоз'} · {order.whenText}</div>
+            {order.comment && <div className="co-meta">💬 {order.comment}</div>}
             <div className="co-items">
               {order.lines.map((l) => (
-                <div className="co-item" key={l.item.name}>
+                <div className="co-item" key={l.item.id}>
                   <span>{l.item.name} × {l.qty}</span>
                   <span>{fmt(l.item.price * l.qty)} ₽</span>
                 </div>
@@ -513,7 +615,10 @@ function ProfileScreen({ active, show, user, order, history }: {
               <div className="history-card" key={o.num}>
                 <div className="hc-top"><span className="hc-num">{o.num}</span><span className="hc-date">{o.date}</span></div>
                 <div className="hc-items">{o.lines.map((l) => `${l.item.name} × ${l.qty}`).join(', ')}</div>
-                <div className="hc-bottom"><span className="hc-total">{fmt(o.total)} ₽</span><span className="status-pill done">Выдан</span></div>
+                <div className="hc-bottom">
+                  <span className="hc-total">{fmt(o.total)} ₽</span>
+                  <button className="repeat-btn" onClick={() => repeatOrder(o)}>🔁 Повторить</button>
+                </div>
               </div>
             ))}
           </div>
@@ -530,7 +635,6 @@ function ProfileScreen({ active, show, user, order, history }: {
 }
 
 /* ══ ADMIN ORDERS ══ */
-// Следующий статус по кнопке + её подпись/стиль/цвет полоски
 const ADMIN_FLOW: Record<Exclude<OrderStatus, 'done'>, { next: OrderStatus; label: string; btn: string; bar: string }> = {
   sent:     { next: 'accepted', label: '✓ Принять',  btn: 'confirm',  bar: 'pending' },
   accepted: { next: 'cooking',  label: '🔥 Готовить', btn: 'confirm',  bar: 'confirmed' },
@@ -544,17 +648,15 @@ function AdminOrdersScreen({ active, show, orders, updateStatus }: {
   const [filter, setFilter] = useState(0);
   const filters: { label: string; match: (s: OrderStatus) => boolean }[] = [
     { label: 'Все', match: () => true },
-    { label: '✋ Принять', match: (s) => s === 'sent' || s === 'accepted' },
-    { label: '🔥 Готовятся', match: (s) => s === 'cooking' },
+    { label: '✋ Принять', match: (s) => s === 'sent' },
+    { label: '🔥 Готовятся', match: (s) => s === 'accepted' || s === 'cooking' },
     { label: '📦 К выдаче', match: (s) => s === 'ready' },
     { label: '✅ Выданы', match: (s) => s === 'done' },
   ];
   const activeCount = orders.filter((o) => o.status !== 'done').length;
-  // Порядок статусов для сортировки: отправлен → принят → готовится → готово → выдан
+  const revenue = orders.reduce((s, o) => s + o.total, 0);
   const order: Record<OrderStatus, number> = { sent: 0, accepted: 1, cooking: 2, ready: 3, done: 4 };
-  const list = orders
-    .filter((o) => filters[filter].match(o.status))
-    .sort((a, b) => (order[a.status] - order[b.status]) || (b.ts - a.ts));
+  const list = orders.filter((o) => filters[filter].match(o.status)).sort((a, b) => (order[a.status] - order[b.status]) || (b.ts - a.ts));
 
   return (
     <div className={screenClass(active)}>
@@ -562,6 +664,10 @@ function AdminOrdersScreen({ active, show, orders, updateStatus }: {
         <div className="admin-header-top">
           <div className="admin-title">⚙️ Заказы</div>
           <div className="admin-badge">{activeCount} активных</div>
+        </div>
+        <div className="stats-row">
+          <div className="stat"><div className="stat-num">{orders.length}</div><div className="stat-label">заказов сегодня</div></div>
+          <div className="stat"><div className="stat-num">{fmt(revenue)} ₽</div><div className="stat-label">выручка</div></div>
         </div>
         <div className="filter-tabs">
           {filters.map((f, i) => (
@@ -585,17 +691,18 @@ function AdminOrdersScreen({ active, show, orders, updateStatus }: {
                   <div className={'aoc-left-bar ' + (flow?.bar ?? 'ready')} />
                   <div style={{ paddingLeft: 8 }}>
                     <div className="aoc-top">
-                      <div className="aoc-num">{o.num}</div>
+                      <div className="aoc-num">{o.num} <span className="aoc-method">{o.method === 'delivery' ? '🛵' : '🏃'}</span></div>
                       <div className="aoc-time">{relativeTime(o.ts)}</div>
                     </div>
                     <div className="aoc-client">{o.client.name}{o.client.phone ? ' · ' + o.client.phone : ''}</div>
                     <div className="aoc-items-text">{o.lines.map((l) => `${l.item.name} × ${l.qty}`).join(', ')}</div>
+                    {o.method === 'delivery' && o.address && <div className="aoc-extra">📍 {o.address}</div>}
+                    {o.whenText && <div className="aoc-extra">🕐 {o.whenText}</div>}
+                    {o.comment && <div className="aoc-extra">💬 {o.comment}</div>}
                     <div className="aoc-bottom">
                       <div className="aoc-total">{fmt(o.total)} ₽</div>
                       {flow && (
-                        <button className={'aoc-btn ' + flow.btn} onClick={() => updateStatus(o.num, flow.next)}>
-                          {flow.label}
-                        </button>
+                        <button className={'aoc-btn ' + flow.btn} onClick={() => updateStatus(o.num, flow.next)}>{flow.label}</button>
                       )}
                     </div>
                   </div>
@@ -615,16 +722,25 @@ function AdminOrdersScreen({ active, show, orders, updateStatus }: {
 }
 
 /* ══ ADMIN PRODUCTS ══ */
-function AdminProductsScreen({ active, show }: { active: boolean; show: ShowFn }) {
-  // Реальные товары из меню (src/data.ts)
-  const products = MENU.flatMap((section) =>
-    section.items.map((it) => ({
-      name: it.name,
-      cat: section.title.replace(/^[^\p{L}]+/u, '').trim(),
-      price: it.price,
-      emoji: it.emoji,
-    })),
-  );
+function AdminProductsScreen({ active, show, products, setProducts }: {
+  active: boolean; show: ShowFn; products: Product[]; setProducts: React.Dispatch<React.SetStateAction<Product[]>>;
+}) {
+  const [editing, setEditing] = useState<Product | 'new' | null>(null);
+  const catTitle = (id: string) => CATEGORIES.find((c) => c.id === id)?.title ?? '';
+
+  const save = (p: Product) => {
+    setProducts((prev) => {
+      const i = prev.findIndex((x) => x.id === p.id);
+      if (i >= 0) { const c = [...prev]; c[i] = p; return c; }
+      return [...prev, p];
+    });
+    setEditing(null);
+  };
+  const remove = (id: string) => {
+    setProducts((prev) => prev.filter((x) => x.id !== id));
+    setEditing(null);
+  };
+
   return (
     <div className={screenClass(active)}>
       <div className="admin-header">
@@ -635,18 +751,18 @@ function AdminProductsScreen({ active, show }: { active: boolean; show: ShowFn }
       </div>
       <div className="scroll-body">
         <div className="admin-products">
-          <button className="add-product-btn">+ Добавить товар</button>
+          <button className="add-product-btn" onClick={() => setEditing('new')}>+ Добавить товар</button>
           {products.map((p) => (
-            <div className="product-card" key={p.name}>
+            <div className="product-card" key={p.id}>
               <div className="product-img">{p.emoji}</div>
               <div className="product-info">
                 <div className="product-name">{p.name}</div>
-                <div className="product-cat">{p.cat}</div>
+                <div className="product-cat">{catTitle(p.cat)}</div>
               </div>
               <div className="product-price">{p.price} ₽</div>
               <div className="product-actions">
-                <button className="pa-btn">✏️</button>
-                <button className="pa-btn">🗑</button>
+                <button className="pa-btn" onClick={() => setEditing(p)}>✏️</button>
+                <button className="pa-btn" onClick={() => remove(p.id)}>🗑</button>
               </div>
             </div>
           ))}
@@ -657,15 +773,84 @@ function AdminProductsScreen({ active, show }: { active: boolean; show: ShowFn }
         <div className="nav-item active"><div className="nav-icon">🍔</div><span>Товары</span><div className="nav-dot" /></div>
         <div className="nav-item" onClick={() => show('admin-profile')}><div className="nav-icon">⚙️</div><span>Настройки</span></div>
       </div>
+
+      {editing && (
+        <ProductModal
+          product={editing === 'new' ? null : editing}
+          onSave={save}
+          onClose={() => setEditing(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function ProductModal({ product, onSave, onClose }: {
+  product: Product | null; onSave: (p: Product) => void; onClose: () => void;
+}) {
+  const [name, setName] = useState(product?.name ?? '');
+  const [desc, setDesc] = useState(product?.desc ?? '');
+  const [price, setPrice] = useState(String(product?.price ?? ''));
+  const [emoji, setEmoji] = useState(product?.emoji ?? '🍔');
+  const [cat, setCat] = useState(product?.cat ?? CATEGORIES[0].id);
+
+  const valid = name.trim().length >= 2 && Number(price) > 0;
+  const submit = () => {
+    onSave({
+      id: product?.id ?? 'c' + Date.now(),
+      name: name.trim(), desc: desc.trim(), price: Number(price), emoji: emoji.trim() || '🍔', cat,
+    });
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-title">{product ? 'РЕДАКТИРОВАТЬ' : 'НОВЫЙ ТОВАР'}</div>
+
+        <label className="modal-label">Название</label>
+        <input className="modal-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Папа Мясника" />
+
+        <label className="modal-label">Категория</label>
+        <select className="modal-input" value={cat} onChange={(e) => setCat(e.target.value)}>
+          {CATEGORIES.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+        </select>
+
+        <div style={{ display: 'flex', gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <label className="modal-label">Цена, ₽</label>
+            <input className="modal-input" inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/\D/g, ''))} placeholder="580" />
+          </div>
+          <div style={{ width: 90 }}>
+            <label className="modal-label">Эмодзи</label>
+            <input className="modal-input" value={emoji} onChange={(e) => setEmoji(e.target.value)} placeholder="🍔" style={{ textAlign: 'center' }} />
+          </div>
+        </div>
+
+        <label className="modal-label">Состав / описание</label>
+        <textarea className="cart-textarea" value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Булочка, соус, котлета..." />
+
+        <button className="modal-submit" disabled={!valid} onClick={submit}>{product ? 'Сохранить' : 'Добавить'}</button>
+      </div>
     </div>
   );
 }
 
 /* ══ ADMIN PROFILE / SETTINGS ══ */
-function AdminProfileScreen({ active, show }: { active: boolean; show: ShowFn }) {
-  const [open, setOpen] = useState(true);
-  const [newOrders, setNewOrders] = useState(true);
-  const [push, setPush] = useState(true);
+function AdminProfileScreen({ active, show, settings, setSettings, orders }: {
+  active: boolean; show: ShowFn; settings: Settings; setSettings: React.Dispatch<React.SetStateAction<Settings>>; orders: Order[];
+}) {
+  const [msg, setMsg] = useState('');
+  const [sent, setSent] = useState(false);
+  const patch = (p: Partial<Settings>) => setSettings((s) => ({ ...s, ...p }));
+
+  const sendBroadcast = () => {
+    if (!msg.trim()) return;
+    // Без бэкенда — демо-подтверждение. Реальная отправка появится с сервером.
+    setSent(true);
+    setMsg('');
+    setTimeout(() => setSent(false), 2500);
+  };
+
   return (
     <div className={screenClass(active)}>
       <div className="admin-header">
@@ -682,24 +867,34 @@ function AdminProfileScreen({ active, show }: { active: boolean; show: ShowFn })
                 <div className="toggle-label">Заведение открыто</div>
                 <div className="toggle-sub">Клиенты могут делать заказы</div>
               </div>
-              <div className={'toggle' + (open ? ' on' : '')} onClick={() => setOpen((v) => !v)} />
+              <div className={'toggle' + (settings.open ? ' on' : '')} onClick={() => patch({ open: !settings.open })} />
             </div>
           </div>
 
           <div className="ap-section">
             <div className="ap-section-title">Время работы</div>
             <div className="time-row">
-              <div className="time-input">11:00</div>
+              <input className="time-input" type="time" value={settings.workFrom} onChange={(e) => patch({ workFrom: e.target.value })} />
               <div className="time-sep">—</div>
-              <div className="time-input">23:00</div>
+              <input className="time-input" type="time" value={settings.workTo} onChange={(e) => patch({ workTo: e.target.value })} />
             </div>
             <div style={{ fontSize: 12, color: 'var(--text-sec)', marginTop: 10 }}>Клиенты видят «Открыто / Закрыто» на основе этого времени</div>
           </div>
 
           <div className="ap-section">
+            <div className="ap-section-title">Статистика за сегодня</div>
+            <div className="stats-row" style={{ marginBottom: 0 }}>
+              <div className="stat"><div className="stat-num">{orders.length}</div><div className="stat-label">заказов</div></div>
+              <div className="stat"><div className="stat-num">{fmt(orders.reduce((s, o) => s + o.total, 0))} ₽</div><div className="stat-label">выручка</div></div>
+              <div className="stat"><div className="stat-num">{orders.filter((o) => o.status === 'done').length}</div><div className="stat-label">выдано</div></div>
+            </div>
+          </div>
+
+          <div className="ap-section">
             <div className="ap-section-title">Рассылка клиентам</div>
-            <textarea className="broadcast-textarea" placeholder="Напишите сообщение для всех клиентов... Например: «Сегодня скидка 20% на все бургеры с 18 до 20:00 🔥»" />
-            <button className="broadcast-btn">📢 Отправить всем клиентам</button>
+            <textarea className="broadcast-textarea" placeholder="Напишите сообщение для всех клиентов... Например: «Сегодня скидка 20% на все бургеры с 18 до 20:00 🔥»" value={msg} onChange={(e) => setMsg(e.target.value)} />
+            <button className="broadcast-btn" onClick={sendBroadcast}>{sent ? '✓ Отправлено' : '📢 Отправить всем клиентам'}</button>
+            <div style={{ fontSize: 11, color: 'var(--text-sec)', marginTop: 8 }}>Реальная отправка подключится с бэкендом</div>
           </div>
 
           <div className="ap-section">
@@ -709,13 +904,13 @@ function AdminProfileScreen({ active, show }: { active: boolean; show: ShowFn })
                 <div className="toggle-label">Новые заказы</div>
                 <div className="toggle-sub">Звук и вибрация</div>
               </div>
-              <div className={'toggle' + (newOrders ? ' on' : '')} onClick={() => setNewOrders((v) => !v)} />
+              <div className={'toggle' + (settings.notifyNew ? ' on' : '')} onClick={() => patch({ notifyNew: !settings.notifyNew })} />
             </div>
             <div className="toggle-row">
               <div>
                 <div className="toggle-label">Push-уведомления</div>
               </div>
-              <div className={'toggle' + (push ? ' on' : '')} onClick={() => setPush((v) => !v)} />
+              <div className={'toggle' + (settings.notifyPush ? ' on' : '')} onClick={() => patch({ notifyPush: !settings.notifyPush })} />
             </div>
           </div>
         </div>

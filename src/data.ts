@@ -14,6 +14,12 @@ export interface MenuSection {
   items: MenuItem[];
 }
 
+// Товар с устойчивым id и категорией — для корзины и редактирования в админке
+export interface Product extends MenuItem {
+  id: string;
+  cat: string;     // id категории (cat-0 … cat-6)
+}
+
 export const CATEGORY_TABS = [
   'Новинки', 'Говядина', 'Курица', 'Боксы', 'Закуски', 'Напитки', 'Соусы',
 ];
@@ -97,3 +103,34 @@ export const MENU: MenuSection[] = [
     ],
   },
 ];
+
+// Категории (id + заголовок с эмодзи); короткие табы совпадают по индексу с CATEGORY_TABS
+export const CATEGORIES = MENU.map((s) => ({ id: s.id, title: s.title }));
+
+// Плоский список товаров (seed) — на его основе строится редактируемый каталог
+export const PRODUCTS: Product[] = MENU.flatMap((s, si) =>
+  s.items.map((it, ii) => ({ ...it, id: `p${si}-${ii}`, cat: s.id })),
+);
+
+// Доставка
+export const DELIVERY = {
+  minOrder: 500,    // минимальная сумма заказа
+  freeFrom: 1500,   // бесплатная доставка от этой суммы
+  fee: 200,         // стоимость доставки
+};
+
+// Настройки заведения
+export interface Settings {
+  open: boolean;
+  workFrom: string;   // 'HH:MM'
+  workTo: string;     // 'HH:MM'
+  notifyNew: boolean;
+  notifyPush: boolean;
+}
+export const DEFAULT_SETTINGS: Settings = {
+  open: true,
+  workFrom: '11:00',
+  workTo: '23:00',
+  notifyNew: true,
+  notifyPush: true,
+};
