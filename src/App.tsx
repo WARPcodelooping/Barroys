@@ -366,7 +366,7 @@ function ItemScreen({ active, show, item, qty, addToCart }: {
           </span>
         </div>
         {qty > 0 && <div className="item-incart">В корзине: {qty} шт</div>}
-        <button className="add-to-cart-btn" onClick={() => { addToCart(item, n); show('cart'); }}>
+        <button className="add-to-cart-btn" onClick={() => { addToCart(item, n); show('home'); }}>
           🛒 Добавить в корзину
         </button>
       </div>
