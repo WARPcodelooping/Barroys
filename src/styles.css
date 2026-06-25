@@ -758,3 +758,15 @@ body {
   border-radius: 12px; text-align: center;
   font-size: 13px; color: var(--text-sec);
 }
+
+/* ── Admin: пустой список заказов ── */
+.admin-empty {
+  display: flex; flex-direction: column; align-items: center;
+  text-align: center; gap: 5px; padding: 60px 28px;
+}
+.admin-empty-emoji { font-size: 44px; opacity: 0.4; margin-bottom: 6px; }
+.admin-empty-title {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 22px; letter-spacing: 0.05em; color: var(--text);
+}
+.admin-empty-sub { font-size: 13px; color: var(--text-sec); line-height: 1.5; }

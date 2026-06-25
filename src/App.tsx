@@ -17,6 +17,8 @@ interface Order {
   total: number;
   status: OrderStatus;
   date: string;
+  ts: number;                       // время создания (ms) — для «N мин назад»
+  client: { name: string; phone: string };
 }
 
 export const ORDER_STEPS: { key: OrderStatus; label: string; icon: string }[] = [
@@ -29,18 +31,43 @@ export const ORDER_STEPS: { key: OrderStatus; label: string; icon: string }[] = 
 
 const USER_KEY = 'barroys_user';
 const ORDER_SEQ_KEY = 'barroys_order_seq';
+const ORDERS_KEY = 'barroys_orders';
 
-// М = мобильный заказ. Нумерация: М01, М02, ...
+function todayKey(): string {
+  return new Date().toLocaleDateString('ru-RU');
+}
+
+// М = мобильный заказ. Нумерация сбрасывается каждый день: М01, М02, ...
 function nextOrderNum(): string {
-  let n = 1;
+  let seq = 1;
   try {
     const raw = localStorage.getItem(ORDER_SEQ_KEY);
-    n = (raw ? parseInt(raw, 10) : 0) + 1;
-    localStorage.setItem(ORDER_SEQ_KEY, String(n));
+    const data = raw ? (JSON.parse(raw) as { date: string; seq: number }) : null;
+    seq = data && data.date === todayKey() ? data.seq + 1 : 1;
+    localStorage.setItem(ORDER_SEQ_KEY, JSON.stringify({ date: todayKey(), seq }));
   } catch {
-    n = 1;
+    seq = 1;
   }
-  return 'М' + String(n).padStart(2, '0');
+  return 'М' + String(seq).padStart(2, '0');
+}
+
+function loadOrders(): Order[] {
+  try {
+    const raw = localStorage.getItem(ORDERS_KEY);
+    if (!raw) return [];
+    const all = JSON.parse(raw) as Order[];
+    // Только сегодняшние заказы — вчерашние не висят в админке
+    return all.filter((o) => new Date(o.ts).toLocaleDateString('ru-RU') === todayKey());
+  } catch {
+    return [];
+  }
+}
+
+function relativeTime(ts: number): string {
+  const min = Math.floor((Date.now() - ts) / 60000);
+  if (min < 1) return 'только что';
+  if (min < 60) return `${min} мин назад`;
+  return `${Math.floor(min / 60)} ч назад`;
 }
 
 function fmt(n: number) {
@@ -62,8 +89,20 @@ export default function App() {
   const [cart, setCart] = useState<CartLine[]>([]);
   const [selected, setSelected] = useState<MenuItem | null>(null);
   const [showReg, setShowReg] = useState(false);
-  const [currentOrder, setCurrentOrder] = useState<Order | null>(null);
-  const [history] = useState<Order[]>([]);
+  const [orders, setOrders] = useState<Order[]>(loadOrders);
+
+  // Заказы храним в localStorage — так клиент и админка видят одно и то же
+  useEffect(() => {
+    try { localStorage.setItem(ORDERS_KEY, JSON.stringify(orders)); } catch { /* ignore */ }
+  }, [orders]);
+
+  // Текущий заказ клиента — самый свежий ещё не выданный; история — выданные
+  const currentOrder = orders.find((o) => o.status !== 'done') ?? null;
+  const history = orders.filter((o) => o.status === 'done');
+
+  const updateStatus = (num: string, status: OrderStatus) => {
+    setOrders((prev) => prev.map((o) => (o.num === num ? { ...o, status } : o)));
+  };
 
   const show = (id: ScreenId) => setScreen(id);
 
@@ -100,15 +139,18 @@ export default function App() {
 
   const checkout = () => {
     if (cart.length === 0) return;
+    const now = Date.now();
     const order: Order = {
       num: nextOrderNum(),
       lines: cart,
       total: cartTotal,
       status: 'sent',
-      date: new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) +
-        ', ' + new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+      ts: now,
+      client: { name: user?.name ?? 'Гость', phone: user?.phone ?? '' },
+      date: new Date(now).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }) +
+        ', ' + new Date(now).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
     };
-    setCurrentOrder(order);
+    setOrders((prev) => [order, ...prev]);
     setCart([]);
     show('confirm');
   };
@@ -137,7 +179,7 @@ export default function App() {
       <CartScreen active={screen === 'cart'} show={show} cart={cart} total={cartTotal} changeQty={changeQty} checkout={checkout} />
       <ConfirmScreen active={screen === 'confirm'} show={show} order={currentOrder} />
       <ProfileScreen active={screen === 'profile'} show={show} user={user} order={currentOrder} history={history} />
-      <AdminOrdersScreen active={screen === 'admin-orders'} show={show} />
+      <AdminOrdersScreen active={screen === 'admin-orders'} show={show} orders={orders} updateStatus={updateStatus} />
       <AdminProductsScreen active={screen === 'admin-products'} show={show} />
       <AdminProfileScreen active={screen === 'admin-profile'} show={show} />
 
@@ -488,73 +530,75 @@ function ProfileScreen({ active, show, user, order, history }: {
 }
 
 /* ══ ADMIN ORDERS ══ */
-function AdminOrdersScreen({ active, show }: { active: boolean; show: ShowFn }) {
+// Следующий статус по кнопке + её подпись/стиль/цвет полоски
+const ADMIN_FLOW: Record<Exclude<OrderStatus, 'done'>, { next: OrderStatus; label: string; btn: string; bar: string }> = {
+  sent:     { next: 'accepted', label: '✓ Принять',  btn: 'confirm',  bar: 'pending' },
+  accepted: { next: 'cooking',  label: '🔥 Готовить', btn: 'confirm',  bar: 'confirmed' },
+  cooking:  { next: 'ready',    label: '📦 Готово',   btn: 'done',     bar: 'confirmed' },
+  ready:    { next: 'done',     label: '✅ Выдан',    btn: 'complete', bar: 'ready' },
+};
+
+function AdminOrdersScreen({ active, show, orders, updateStatus }: {
+  active: boolean; show: ShowFn; orders: Order[]; updateStatus: (num: string, s: OrderStatus) => void;
+}) {
   const [filter, setFilter] = useState(0);
-  const filters = ['Все', 'Ожидают ✋', 'Готовятся 🔥', 'Готово 📦'];
+  const filters: { label: string; match: (s: OrderStatus) => boolean }[] = [
+    { label: 'Все', match: (s) => s !== 'done' },
+    { label: 'Ожидают ✋', match: (s) => s === 'sent' || s === 'accepted' },
+    { label: 'Готовятся 🔥', match: (s) => s === 'cooking' },
+    { label: 'Готово 📦', match: (s) => s === 'ready' },
+  ];
+  const activeCount = orders.filter((o) => o.status !== 'done').length;
+  const list = orders.filter((o) => filters[filter].match(o.status));
+
   return (
     <div className={screenClass(active)}>
       <div className="admin-header">
         <div className="admin-header-top">
           <div className="admin-title">⚙️ Заказы</div>
-          <div className="admin-badge">4 активных</div>
+          <div className="admin-badge">{activeCount} активных</div>
         </div>
         <div className="filter-tabs">
           {filters.map((f, i) => (
-            <div key={f} className={'f-tab' + (filter === i ? ' active' : '')} onClick={() => setFilter(i)}>{f}</div>
+            <div key={f.label} className={'f-tab' + (filter === i ? ' active' : '')} onClick={() => setFilter(i)}>{f.label}</div>
           ))}
         </div>
       </div>
       <div className="scroll-body">
-        <div className="admin-orders">
-          <div className="admin-order-card">
-            <div className="aoc-left-bar pending" />
-            <div style={{ paddingLeft: 8 }}>
-              <div className="aoc-top"><div className="aoc-num">#043</div><div className="aoc-time">только что</div></div>
-              <div className="aoc-client">Мария Соколова · +7 (912) 345-67-89</div>
-              <div className="aoc-items-text">Семён Сыроделов × 1, Картофель Фри × 1, Лимонад × 1</div>
-              <div className="aoc-bottom">
-                <div className="aoc-total">1 070 ₽</div>
-                <button className="aoc-btn confirm">✓ Подтвердить</button>
-              </div>
-            </div>
+        {list.length === 0 ? (
+          <div className="admin-empty">
+            <div className="admin-empty-emoji">📋</div>
+            <div className="admin-empty-title">Заказов нет</div>
+            <div className="admin-empty-sub">Новые заказы клиентов появятся здесь автоматически</div>
           </div>
-          <div className="admin-order-card">
-            <div className="aoc-left-bar confirmed" />
-            <div style={{ paddingLeft: 8 }}>
-              <div className="aoc-top"><div className="aoc-num">#042</div><div className="aoc-time">12 мин назад</div></div>
-              <div className="aoc-client">Андрей Никитин · +7 (999) 123-45-67</div>
-              <div className="aoc-items-text">Вишня на конце × 1, Рулон Гриль × 1</div>
-              <div className="aoc-bottom">
-                <div className="aoc-total">1 030 ₽</div>
-                <button className="aoc-btn done">📦 Готово</button>
-              </div>
-            </div>
+        ) : (
+          <div className="admin-orders">
+            {list.map((o) => {
+              const flow = o.status === 'done' ? null : ADMIN_FLOW[o.status];
+              return (
+                <div className="admin-order-card" key={o.num}>
+                  <div className={'aoc-left-bar ' + (flow?.bar ?? 'ready')} />
+                  <div style={{ paddingLeft: 8 }}>
+                    <div className="aoc-top">
+                      <div className="aoc-num">{o.num}</div>
+                      <div className="aoc-time">{relativeTime(o.ts)}</div>
+                    </div>
+                    <div className="aoc-client">{o.client.name}{o.client.phone ? ' · ' + o.client.phone : ''}</div>
+                    <div className="aoc-items-text">{o.lines.map((l) => `${l.item.name} × ${l.qty}`).join(', ')}</div>
+                    <div className="aoc-bottom">
+                      <div className="aoc-total">{fmt(o.total)} ₽</div>
+                      {flow && (
+                        <button className={'aoc-btn ' + flow.btn} onClick={() => updateStatus(o.num, flow.next)}>
+                          {flow.label}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          <div className="admin-order-card">
-            <div className="aoc-left-bar ready" />
-            <div style={{ paddingLeft: 8 }}>
-              <div className="aoc-top"><div className="aoc-num">#041</div><div className="aoc-time">25 мин назад</div></div>
-              <div className="aoc-client">Иван Петров · +7 (900) 111-22-33</div>
-              <div className="aoc-items-text">Отец Папы Мясника × 1, Луковые кольца × 1</div>
-              <div className="aoc-bottom">
-                <div className="aoc-total">990 ₽</div>
-                <button className="aoc-btn complete">✅ Завершён</button>
-              </div>
-            </div>
-          </div>
-          <div className="admin-order-card">
-            <div className="aoc-left-bar pending" />
-            <div style={{ paddingLeft: 8 }}>
-              <div className="aoc-top"><div className="aoc-num">#044</div><div className="aoc-time">3 мин назад</div></div>
-              <div className="aoc-client">Екатерина Волк · +7 (965) 778-90-12</div>
-              <div className="aoc-items-text">Бокс по-Техасски × 2</div>
-              <div className="aoc-bottom">
-                <div className="aoc-total">1 140 ₽</div>
-                <button className="aoc-btn confirm">✓ Подтвердить</button>
-              </div>
-            </div>
-          </div>
-        </div>
+        )}
       </div>
       <div className="admin-nav">
         <div className="nav-item active"><div className="nav-icon">📋</div><span>Заказы</span><div className="nav-dot" /></div>
@@ -567,20 +611,21 @@ function AdminOrdersScreen({ active, show }: { active: boolean; show: ShowFn }) 
 
 /* ══ ADMIN PRODUCTS ══ */
 function AdminProductsScreen({ active, show }: { active: boolean; show: ShowFn }) {
-  const products = [
-    { name: 'Папа Мясника', cat: 'Мраморная говядина', price: 580, emoji: '🍔' },
-    { name: 'Горячий Мексиканец', cat: 'Мраморная говядина', price: 570, emoji: '🍔' },
-    { name: 'Вишня на конце', cat: 'Новинки', price: 610, emoji: '🍔' },
-    { name: 'Рулон Гриль', cat: 'Новинки', price: 420, emoji: '🌯' },
-    { name: 'Картофель Фри', cat: 'Закуски', price: 180, emoji: '🍟' },
-    { name: 'Том Ямус', cat: 'Новинки', price: 550, emoji: '🍜' },
-  ];
+  // Реальные товары из меню (src/data.ts)
+  const products = MENU.flatMap((section) =>
+    section.items.map((it) => ({
+      name: it.name,
+      cat: section.title.replace(/^[^\p{L}]+/u, '').trim(),
+      price: it.price,
+      emoji: it.emoji,
+    })),
+  );
   return (
     <div className={screenClass(active)}>
       <div className="admin-header">
         <div className="admin-header-top">
           <div className="admin-title">🍔 Товары</div>
-          <div className="admin-badge">28 позиций</div>
+          <div className="admin-badge">{products.length} позиций</div>
         </div>
       </div>
       <div className="scroll-body">
